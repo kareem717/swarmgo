@@ -245,7 +245,7 @@ func (s *Swarm) StreamingResponse(
 							// Only execute if we haven't processed this tool call yet
 							if !processedToolCalls[toolCall.ID] {
 								// Find and execute the corresponding function
-								var fn *AgentFunction
+								var fn *AgentFunction[map[string]interface{}]
 								for _, f := range agent.Functions {
 									if f.Name == inProgress.Function.Name {
 										fn = &f
@@ -265,7 +265,7 @@ func (s *Swarm) StreamingResponse(
 								}
 
 								// Execute the function
-								result := fn.Function(args, contextVariables)
+								result := fn.executor(args, contextVariables)
 
 								// Create function response message
 								var resultContent string

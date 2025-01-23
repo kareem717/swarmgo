@@ -3,6 +3,7 @@ package swarmgo
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -54,27 +55,74 @@ func TestNewSwarmWithHost(t *testing.T) {
 }
 
 // TestFunctionToDefinition tests the FunctionToDefinition function
-func TestFunctionToDefinition(t *testing.T) {
-	af := AgentFunction{
-		Name:        "testFunction",
-		Description: "A test function",
-		Parameters: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"arg1": map[string]interface{}{
-					"type":        "string",
-					"description": "Argument 1",
-				},
-			},
-			"required": []interface{}{"arg1"},
+type TestFunctionArgs struct {
+	Arg1 int `json:"arg1"`
+}
+
+func TestFunctionToDefinitionBasic(t *testing.T) {
+	af, err := NewAgentFunction(
+		"testFunction",
+		"A test function",
+		func(args TestFunctionArgs, contextVariables map[string]interface{}) Result {
+			return Result{
+				Success: true,
+				Data:    "Function executed successfully",
+			}
 		},
-	}
+	)
+
+	assert.NoError(t, err)
 
 	def := FunctionToDefinition(af)
 
+	// Generate JSON schema for the type
+	expectedSchema := map[string]interface{}{
+		"properties": map[string]interface{}{
+			"arg1": map[string]interface{}{"type": "integer"},
+		},
+		"type": "object",
+		"additionalProperties": false,
+	}
+
 	assert.Equal(t, af.Name, def.Name)
 	assert.Equal(t, af.Description, def.Description)
-	assert.Equal(t, af.Parameters, def.Parameters)
+	assert.Equal(t, expectedSchema, def.Parameters)
+}
+
+// TestFunctionToDefinition tests the FunctionToDefinition function
+type TestFunctionArgsWithRequired struct {
+	Arg1 int `json:"arg1" jsonschema:"required,description=This is a required argument"`
+}
+
+func TestFunctionToDefinitionWithRequired(t *testing.T) {
+	af, err := NewAgentFunction(
+		"testFunction",
+		"A test function",
+		func(args TestFunctionArgsWithRequired, contextVariables map[string]interface{}) Result {
+			return Result{
+				Success: true,
+				Data:    "Function executed successfully",
+			}
+		},
+	)
+
+	assert.NoError(t, err)
+
+	def := FunctionToDefinition(af)
+
+	// Generate JSON schema for the type
+	expectedSchema := map[string]interface{}{
+		"properties": map[string]interface{}{
+			"arg1": map[string]interface{}{"type": "integer", "description": "This is a required argument"},
+		},
+		"type":     "object",
+		"required": []interface{}{"arg1"},
+		"additionalProperties": false,
+	}
+
+	assert.Equal(t, af.Name, def.Name)
+	assert.Equal(t, af.Description, def.Description)
+	assert.Equal(t, expectedSchema, def.Parameters)
 }
 
 // TestHandleToolCall tests the handleToolCall method
@@ -82,33 +130,42 @@ func TestHandleToolCall(t *testing.T) {
 	sw := NewSwarm("test-api-key", llm.OpenAI)
 	ctx := context.Background()
 
+	args := TestFunctionArgs{
+		Arg1: 123,
+	}
+
+	stringArgs, err := json.Marshal(args)
+	if err != nil {
+		t.Fatalf("Error marshaling arguments: %v", err)
+	}
+
 	toolCall := llm.ToolCall{
 		ID:   "testFunction",
 		Type: "function",
-		Function: struct {
-			Name      string "json:\"name\""
-			Arguments string "json:\"arguments\""
-		}{
+		Function: llm.ToolCallFunction{
 			Name:      "testFunction",
-			Arguments: `{"arg1": "value1"}`,
+			Arguments: string(stringArgs),
 		},
 	}
 
-	agentFunction := AgentFunction{
-		Name:        "testFunction",
-		Description: "A test function",
-		Function: func(args map[string]interface{}, contextVariables map[string]interface{}) Result {
+	agentFunction, err := NewAgentFunction(
+		"testFunction",
+		"A test function",
+		func(args TestFunctionArgs, contextVariables map[string]interface{}) Result {
 			return Result{
 				Success: true,
-				Data:    "Function executed successfully",
+				Data:    args.Arg1 + 1,
 			}
 		},
-	}
+	)
+	assert.NoError(t, err)
 
 	agent := &Agent{
-		Name:      "TestAgent",
-		Functions: []AgentFunction{agentFunction},
+		Name:  "TestAgent",
+		Model: "test-model",
 	}
+
+	agent.WithFunctions(agentFunction)
 
 	contextVariables := map[string]interface{}{}
 
@@ -117,7 +174,7 @@ func TestHandleToolCall(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, response.Messages, 1)
 	assert.Equal(t, llm.RoleAssistant, response.Messages[0].Role)
-	assert.Equal(t, "Function executed successfully", response.Messages[0].Content)
+	assert.Equal(t, "124", response.Messages[0].Content)
 }
 
 // TestHandleToolCallFunctionNotFound tests handleToolCall when function is not found
@@ -138,8 +195,7 @@ func TestHandleToolCallFunctionNotFound(t *testing.T) {
 	}
 
 	agent := &Agent{
-		Name:      "TestAgent",
-		Functions: []AgentFunction{},
+		Name: "TestAgent",
 	}
 
 	contextVariables := map[string]interface{}{}
@@ -158,22 +214,23 @@ func TestRun(t *testing.T) {
 	sw := NewMockSwarm(mockClient)
 	ctx := context.Background()
 
-	agentFunction := AgentFunction{
-		Name:        "testFunction",
-		Description: "A test function",
-		Function: func(args map[string]interface{}, contextVariables map[string]interface{}) Result {
+	agentFunction, err := NewAgentFunction(
+		"testFunction",
+		"A test function",
+		func(args map[string]interface{}, contextVariables map[string]interface{}) Result {
 			return Result{
 				Success: true,
 				Data:    "Function executed successfully",
 			}
 		},
-	}
+	)
+	assert.NoError(t, err)
 
 	agent := &Agent{
-		Name:      "TestAgent",
-		Functions: []AgentFunction{agentFunction},
-		Model:     "test-model",
+		Name: "TestAgent",
 	}
+
+	agent.WithFunctions(agentFunction)
 
 	messages := []llm.Message{
 		{Role: llm.RoleUser, Content: "Hello"},
@@ -232,22 +289,22 @@ func TestRunFunctionCallError(t *testing.T) {
 	sw := NewMockSwarm(mockClient)
 	ctx := context.Background()
 
-	agentFunction := AgentFunction{
-		Name:        "testFunction",
-		Description: "A test function",
-		Function: func(args map[string]interface{}, contextVariables map[string]interface{}) Result {
+	agentFunction, err := NewAgentFunction(
+		"testFunction",
+		"A test function",
+		func(args map[string]interface{}, contextVariables map[string]interface{}) Result {
 			return Result{
 				Success: true,
 				Data:    "Function executed successfully",
 			}
 		},
-	}
+	)
+	assert.NoError(t, err)
 
 	agent := &Agent{
-		Name:      "TestAgent",
-		Functions: []AgentFunction{agentFunction},
-		Model:     "test-model",
+		Name: "TestAgent",
 	}
+	agent.WithFunctions(agentFunction)
 
 	messages := []llm.Message{
 		{Role: llm.RoleUser, Content: "Hello"},

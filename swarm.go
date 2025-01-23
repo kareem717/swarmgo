@@ -139,18 +139,18 @@ func (s *Swarm) handleToolCall(
 	toolName := toolCall.Function.Name
 	argsJSON := toolCall.Function.Arguments
 
-	// Parse the tool call arguments
-	var args map[string]interface{}
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+	// First parse into a generic map
+	var argsMap map[string]interface{}
+	if err := json.Unmarshal([]byte(argsJSON), &argsMap); err != nil {
 		return Response{}, err
 	}
 
 	if debug {
-		log.Printf("Processing tool call: %s with arguments %v\n", toolName, args)
+		log.Printf("Processing tool call: %s with arguments %v\n", toolName, argsMap)
 	}
 
-	// Find the corresponding function in the agent's functions
-	var functionFound *AgentFunction
+	// Find the corresponding function
+	var functionFound *AgentFunction[map[string]interface{}]
 	for _, af := range agent.Functions {
 		if af.Name == toolName {
 			functionFound = &af
@@ -174,8 +174,8 @@ func (s *Swarm) handleToolCall(
 		}, nil
 	}
 
-	// Execute the function
-	result := functionFound.Function(args, contextVariables)
+	// Execute the function with the properly typed arguments
+	result := functionFound.executor(argsMap, contextVariables)
 
 	// Create a message with the tool result
 	toolResultMessage := llm.Message{
